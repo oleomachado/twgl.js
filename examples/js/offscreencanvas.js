@@ -1,7 +1,6 @@
 'use strict';
 
-importScripts('../../dist/4.x/twgl-full.min.js');
-importScripts('../../3rdparty/chroma.min.js');
+import * as twgl from '../../dist/4.x/twgl-full.module.js';
 
 const onePointVS = `
 uniform mat4 u_worldViewProjection;
@@ -93,7 +92,6 @@ function main(gl) {
   }
 
   // Shared values
-  const baseHue = rand(360);
   const camera = m4.identity();
   const view = m4.identity();
   const viewProjection = m4.identity();
@@ -198,7 +196,7 @@ function main(gl) {
         shape = shapes[ii % shapes.length];
         programInfo = onePointProgramInfo;
         uniforms = {
-          u_diffuseMult: chroma.hsv((baseHue + rand(0, 60)) % 360, 0.4, 0.8).gl(),
+          u_diffuseMult: [rand(1), rand(1), rand(1), 1],
           u_diffuse: twoDTextures[rand(0, twoDTextures.length) | 0],
           u_viewInverse: camera,
           u_world: m4.identity(),

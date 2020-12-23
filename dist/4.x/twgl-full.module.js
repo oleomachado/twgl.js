@@ -1,4 +1,4 @@
-/* @license twgl.js 4.15.2 Copyright (c) 2015, Gregg Tavares All Rights Reserved.
+/* @license twgl.js 4.17.0 Copyright (c) 2015, Gregg Tavares All Rights Reserved.
 Available via the MIT license.
 see: http://github.com/greggman/twgl.js for details */
 /*
@@ -4970,14 +4970,16 @@ const defaults$1 = {
 const isArrayBuffer$1 = isArrayBuffer;
 
 // Should we make this on demand?
-let s_ctx;
-function getShared2DContext() {
-  s_ctx = s_ctx ||
-      ((typeof document !== 'undefined' && document.createElement)
-        ? document.createElement("canvas").getContext("2d")
-        : null);
-  return s_ctx;
-}
+const getShared2DContext = function() {
+  let s_ctx;
+  return function getShared2DContext() {
+    s_ctx = s_ctx ||
+        ((typeof document !== 'undefined' && document.createElement)
+          ? document.createElement("canvas").getContext("2d")
+          : null);
+    return s_ctx;
+  };
+}();
 
 // NOTE: Chrome supports 2D canvas in a Worker (behind flag as of v64 but
 //       not only does Firefox NOT support it but Firefox freezes immediately
@@ -5177,6 +5179,7 @@ function getTextureInternalFormatInfo(internalFormat) {
     t[LUMINANCE_ALPHA]    = { textureFormat: LUMINANCE_ALPHA, colorRenderable: true,  textureFilterable: true,  bytesPerElement: [2, 4, 4, 8],        type: [UNSIGNED_BYTE$2, HALF_FLOAT$1, HALF_FLOAT_OES, FLOAT$2], };
     t[RGB]                = { textureFormat: RGB,             colorRenderable: true,  textureFilterable: true,  bytesPerElement: [3, 6, 6, 12, 2],    type: [UNSIGNED_BYTE$2, HALF_FLOAT$1, HALF_FLOAT_OES, FLOAT$2, UNSIGNED_SHORT_5_6_5$1], };
     t[RGBA]               = { textureFormat: RGBA,            colorRenderable: true,  textureFilterable: true,  bytesPerElement: [4, 8, 8, 16, 2, 2], type: [UNSIGNED_BYTE$2, HALF_FLOAT$1, HALF_FLOAT_OES, FLOAT$2, UNSIGNED_SHORT_4_4_4_4$1, UNSIGNED_SHORT_5_5_5_1$1], };
+    t[DEPTH_COMPONENT]    = { textureFormat: DEPTH_COMPONENT, colorRenderable: true,  textureFilterable: false, bytesPerElement: [2, 4],              type: [UNSIGNED_INT$2, UNSIGNED_SHORT$2], };
 
     // sized formats
     t[R8]                 = { textureFormat: RED,             colorRenderable: true,  textureFilterable: true,  bytesPerElement: [1],        type: [UNSIGNED_BYTE$2], };
@@ -7268,6 +7271,23 @@ attrTypeMap[FLOAT_MAT2]        = { size:  4, setter: matAttribSetter,   count: 2
 attrTypeMap[FLOAT_MAT3]        = { size:  9, setter: matAttribSetter,   count: 3, };
 attrTypeMap[FLOAT_MAT4]        = { size: 16, setter: matAttribSetter,   count: 4, };
 
+const errorRE = /ERROR:\s*\d+:(\d+)/gi;
+function addLineNumbersWithError(src, log = '', lineOffset = 0) {
+  // Note: Error message formats are not defined by any spec so this may or may not work.
+  const matches = [...log.matchAll(errorRE)];
+  const lineNoToErrorMap = new Map(matches.map((m, ndx) => {
+    const lineNo = parseInt(m[1]);
+    const next = matches[ndx + 1];
+    const end = next ? next.index : log.length;
+    const msg = log.substring(m.index, end);
+    return [lineNo - 1, msg];
+  }));
+  return src.split('\n').map((line, lineNo) => {
+    const err = lineNoToErrorMap.get(lineNo);
+    return `${lineNo + 1 + lineOffset}: ${line}${err ? `\n\n^^^ ${err}` : ''}`;
+  }).join('\n');
+}
+
 /**
  * Error Callback
  * @callback ErrorCallback
@@ -7275,15 +7295,6 @@ attrTypeMap[FLOAT_MAT4]        = { size: 16, setter: matAttribSetter,   count: 4
  * @param {number} [lineOffset] amount to add to line number
  * @memberOf module:twgl
  */
-
-function addLineNumbers(src, lineOffset) {
-  lineOffset = lineOffset || 0;
-  ++lineOffset;
-
-  return src.split("\n").map(function(line, ndx) {
-    return (ndx + lineOffset) + ": " + line;
-  }).join("\n");
-}
 
 const spaceRE = /^[ \t]*\n/;
 
@@ -7329,7 +7340,7 @@ function loadShader(gl, shaderSource, shaderType, opt_errorCallback) {
   if (!compiled) {
     // Something went wrong during compilation; get the error
     const lastError = gl.getShaderInfoLog(shader);
-    errFn(addLineNumbers(shaderSource, lineOffset) + "\n*** Error compiling shader: " + lastError);
+    errFn(`${addLineNumbersWithError(shaderSource, lastError, lineOffset)}\nError compiling ${glEnumToString(gl, shaderType)}: ${lastError}`);
     gl.deleteShader(shader);
     return null;
   }
@@ -7495,7 +7506,13 @@ function createProgram(
   if (!linked) {
     // something went wrong with the link
     const lastError = gl.getProgramInfoLog(program);
-    progOptions.errorCallback("Error in program linking:" + lastError);
+    progOptions.errorCallback(`${
+      realShaders.map(shader => {
+        const src = addLineNumbersWithError(gl.getShaderSource(shader), '', 0);
+        const type = gl.getShaderParameter(shader, gl.SHADER_TYPE);
+        return `${glEnumToString(gl, type)}\n${src}}`;
+      }).join('\n')
+    }\nError in program linking: ${lastError}`);
 
     gl.deleteProgram(program);
     deleteShaders(gl, newShaders);
@@ -7649,7 +7666,7 @@ function createUniformSetters(gl, program) {
    * @returns {function} the created setter.
    */
   function createUniformSetter(program, uniformInfo, location) {
-    const isArray = (uniformInfo.size > 1 && uniformInfo.name.substr(-3) === "[0]");
+    const isArray = uniformInfo.name.endsWith("[0]");
     const type = uniformInfo.type;
     const typeInfo = typeMap[type];
     if (!typeInfo) {
@@ -7686,7 +7703,7 @@ function createUniformSetters(gl, program) {
     }
     let name = uniformInfo.name;
     // remove the array suffix.
-    if (name.substr(-3) === "[0]") {
+    if (name.endsWith("[0]")) {
       name = name.substr(0, name.length - 3);
     }
     const location = gl.getUniformLocation(program, uniformInfo.name);
